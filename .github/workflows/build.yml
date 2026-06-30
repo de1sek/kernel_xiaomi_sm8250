@@ -32,7 +32,7 @@ jobs:
         run: |
           git clone --depth=1 https://github.com/kdrag0n/proton-clang.git ~/proton-clang
 
-      - name: Build Kernel
+            - name: Build Kernel
         run: |
           export PATH="$HOME/proton-clang/bin:$PATH"
           export ARCH=arm64
@@ -40,22 +40,26 @@ jobs:
           export KBUILD_BUILD_USER="de1sek"
           export KBUILD_BUILD_HOST="GitHub-Actions"
 
-          # 清理旧的 swap 并重新创建（关键修复）
+          # Swap
           sudo swapoff -a 2>/dev/null || true
           sudo rm -f /swapfile
           sudo fallocate -l 10G /swapfile
           sudo chmod 600 /swapfile
           sudo mkswap /swapfile
           sudo swapon /swapfile
-          echo "=== Swap Created ==="
-          free -h
 
           make O=out clean 2>/dev/null || true
           make O=out mrproper 2>/dev/null || true
 
           make O=out thyme_defconfig
 
-          # 保守编译
+          # === 关键修复：禁用冲突的触摸屏驱动 ===
+          scripts/config --file out/.config -d TOUCHSCREEN_ST -d TOUCHSCREEN_FTS_521
+
+          # 重新生成配置
+          make O=out olddefconfig
+
+          # 开始编译
           make -j2 O=out \
             CC=clang \
             HOSTCC=gcc \
@@ -74,7 +78,6 @@ jobs:
             CONFIG_WERROR=n \
             -k 2>&1 | tee build.log
         shell: bash
-
       - name: Upload Kernel Artifacts
         uses: actions/upload-artifact@v4
         with:
