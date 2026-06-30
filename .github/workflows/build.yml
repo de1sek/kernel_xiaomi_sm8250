@@ -1,0 +1,66 @@
+name: Build Xiaomi SM8250 Kernel (Thyme)
+
+on:
+  workflow_dispatch: # 允许手动点击按钮触发编译
+
+jobs:
+  build:
+    name: Build Kernel
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout Kernel Source
+        uses: actions/checkout@v4
+        with:
+          ref: alioth-r-oss # 强制切到你的目标分支
+          
+      - name: Setup Build Environment
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf imagemagick lib32ncurses5-dev lib32readline-dev lib32z1-dev liblz4-tool libncurses5 libncurses5-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev python3 libxml-simple-perl libtinfo5
+
+      - name: Download Proton-Clang
+        run: |
+          # 下载适合高通 4.19 内核的高性能 Proton-Clang 编译器
+          git clone --depth=1 https://github.com/kdrag0n/proton-clang.git ~/proton-clang
+          
+      - name: Build Kernel
+        run: |
+          # 导入环境变量与编译器路径
+          export PATH="$HOME/proton-clang/bin:$PATH"
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export KBUILD_BUILD_USER="de1sek"
+          export KBUILD_BUILD_HOST="GitHub-Actions"
+          
+          # 清理可能存在的残留文件
+          make O=out clean
+          make O=out mrproper
+          
+          # 载入你指定的 thyme_defconfig 配置
+          make O=out thyme_defconfig
+          
+          # 强制使用 LLVM/Clang 工具链开始全面编译
+          make -j$(nproc --all) O=out \
+                          CC=clang \
+                          LD=ld.lld \
+                          AR=llvm-ar \
+                          NM=llvm-nm \
+                          OBJCOPY=llvm-objcopy \
+                          OBJDUMP=llvm-objdump \
+                          STRIP=llvm-strip \
+                          LLVM=1 \
+                          LLVM_IAS=1
+                          
+      - name: Upload Kernel Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Kernel-Thyme-alioth-r-oss
+          path: |
+            out/arch/arm64/boot/Image
+            out/arch/arm64/boot/Image.gz
+            out/arch/arm64/boot/dtbo.img
+            out/arch/arm64/boot/dtb
+            out/arch/arm64/boot/dtb.img
+            out/arch/arm64/boot/dts/vendor/qcom/*.dtb
+          if-no-files-found: warn
