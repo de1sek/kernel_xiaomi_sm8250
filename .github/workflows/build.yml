@@ -1,8 +1,6 @@
 name: Build Xiaomi SM8250 Kernel (Thyme)
-
 on:
   workflow_dispatch:
-
 jobs:
   build:
     name: Build Kernel
@@ -23,14 +21,21 @@ jobs:
             libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip \
             zlib1g-dev python3 libxml-simple-perl
 
-          echo "deb http://archive.ubuntu.com/ubuntu jammy main universe" | sudo tee /etc/apt/sources.list.d/jammy-compat.list
-          sudo apt-get update
-          sudo apt-get install -y libtinfo5 libncurses5
-          sudo rm /etc/apt/sources.list.d/jammy-compat.list
+          # ubuntu-22.04 已自带 libncurses5 / libtinfo5，无需额外添加源
 
       - name: Download Proton-Clang
         run: |
           git clone --depth=1 https://github.com/kdrag0n/proton-clang.git ~/proton-clang
+
+      - name: Create Swap
+        run: |
+          sudo swapoff -a 2>/dev/null || true
+          sudo rm -f /swapfile
+          sudo fallocate -l 10G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          free -h
 
       - name: Build Kernel
         run: |
@@ -40,44 +45,36 @@ jobs:
           export KBUILD_BUILD_USER="de1sek"
           export KBUILD_BUILD_HOST="GitHub-Actions"
 
-          # Swap
-          sudo swapoff -a 2>/dev/null || true
-          sudo rm -f /swapfile
-          sudo fallocate -l 10G /swapfile
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile
-          sudo swapon /swapfile
-
           make O=out clean 2>/dev/null || true
           make O=out mrproper 2>/dev/null || true
 
+          # 加载 thyme defconfig
           make O=out thyme_defconfig
 
-          # 禁用旧的ST触摸屏驱动
-          sed -i '/CONFIG_TOUCHSCREEN_ST/d' out/.config
-          echo "# CONFIG_TOUCHSCREEN_ST is not set" >> out/.config
+          # ---- 关键修复 ----
+          # thyme_defconfig 只有一个触摸屏 config：CONFIG_TOUCHSCREEN_ST_FTS_V521=y
+          # 但 drivers/input/touchscreen/Makefile 把 fts_521/ 和 st/ 两个目录
+          # 都挂在同一个 config 下，导致二者同时编译，20 个函数名重复，
+          # ld.lld 链接失败。
+          # thyme 实际用的是 st/ 驱动（固件 st_fts_j*.ftb 属于 st/ 目录），
+          # 直接从 Makefile 删掉 fts_521/ 那行即可。
+          echo ">>> Patching Makefile: removing fts_521 from touchscreen build..."
+          sed -i '/fts_521/d' drivers/input/touchscreen/Makefile
+          # ---- 修复结束 ----
 
-          make O=out olddefconfig
-
-          # 强制编译（忽略错误继续）
-          make -j2 O=out \
+          make -j$(nproc --all) O=out \
             CC=clang \
-            HOSTCC=gcc \
             LD=ld.lld \
             AR=llvm-ar \
             NM=llvm-nm \
             OBJCOPY=llvm-objcopy \
+            OBJDUMP=llvm-objdump \
             STRIP=llvm-strip \
             LLVM=1 \
             LLVM_IAS=1 \
             CLANG_TRIPLE=aarch64-linux-gnu- \
             CROSS_COMPILE=aarch64-linux-gnu- \
-            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
-            CONFIG_DEBUG_INFO=n \
-            CONFIG_DEBUG_KERNEL=n \
-            CONFIG_WERROR=n \
-            -k 2>&1 | tee build.log || true   # 强制继续，即使有错误
-        shell: bash
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi-
 
       - name: Upload Kernel Artifacts
         uses: actions/upload-artifact@v4
