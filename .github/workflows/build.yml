@@ -53,16 +53,13 @@ jobs:
 
           make O=out thyme_defconfig
 
-          # 禁用冲突的触摸屏驱动
+          # 禁用旧的ST触摸屏驱动
           sed -i '/CONFIG_TOUCHSCREEN_ST/d' out/.config
-          sed -i '/CONFIG_TOUCHSCREEN_FTS_521/d' out/.config
           echo "# CONFIG_TOUCHSCREEN_ST is not set" >> out/.config
-          echo "# CONFIG_TOUCHSCREEN_FTS_521 is not set" >> out/.config
 
-          # 重新生成配置
           make O=out olddefconfig
 
-          # 开始编译
+          # 编译（跳过 dtbo 生成）
           make -j2 O=out \
             CC=clang \
             HOSTCC=gcc \
@@ -79,7 +76,7 @@ jobs:
             CONFIG_DEBUG_INFO=n \
             CONFIG_DEBUG_KERNEL=n \
             CONFIG_WERROR=n \
-            -k 2>&1 | tee build.log
+            -k --error-limit=0 2>&1 | tee build.log
         shell: bash
 
       - name: Upload Kernel Artifacts
@@ -89,7 +86,4 @@ jobs:
           path: |
             out/arch/arm64/boot/Image
             out/arch/arm64/boot/Image.gz
-            out/arch/arm64/boot/dtb
-            out/arch/arm64/boot/dtb.img
-            out/arch/arm64/boot/dts/vendor/qcom/*.dtb
           if-no-files-found: warn
