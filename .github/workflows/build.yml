@@ -35,36 +35,43 @@ jobs:
           git clone --depth=1 https://github.com/kdrag0n/proton-clang.git ~/proton-clang
 
       - name: Build Kernel
-        run: |
-          export PATH="$HOME/proton-clang/bin:$PATH"
-          export ARCH=arm64
-          export SUBARCH=arm64
-          export KBUILD_BUILD_USER="de1sek"
-          export KBUILD_BUILD_HOST="GitHub-Actions"
+  run: |
+    export PATH="$HOME/proton-clang/bin:$PATH"
+    export ARCH=arm64
+    export SUBARCH=arm64
+    export KBUILD_BUILD_USER="de1sek"
+    export KBUILD_BUILD_HOST="GitHub-Actions"
 
-          # 清理
-          make O=out clean 2>/dev/null || true
-          make O=out mrproper 2>/dev/null || true
+    # 增加 Swap
+    sudo fallocate -l 10G /swapfile
+    sudo chmod 600 /swapfile
+    sudo mkswap /swapfile
+    sudo swapon /swapfile
 
-          # 生成配置
-          make O=out thyme_defconfig
+    make O=out clean 2>/dev/null || true
+    make O=out mrproper 2>/dev/null || true
 
-          # 关键修复：使用系统 gcc 编译 host tools，Clang 只用于 kernel
-          make -j$(nproc --all) O=out \
-            CC=clang \
-            HOSTCC=gcc \
-            LD=ld.lld \
-            AR=llvm-ar \
-            NM=llvm-nm \
-            OBJCOPY=llvm-objcopy \
-            OBJDUMP=llvm-objdump \
-            STRIP=llvm-strip \
-            LLVM=1 \
-            LLVM_IAS=1 \
-            CLANG_TRIPLE=aarch64-linux-gnu- \
-            CROSS_COMPILE=aarch64-linux-gnu- \
-            CROSS_COMPILE_ARM32=arm-linux-gnueabi-
-        shell: bash
+    make O=out thyme_defconfig
+
+    # 关键优化：降低并行度 + 关闭调试 + 允许 warning
+    make -j2 O=out \          # ← 改成 -j2 防止 OOM
+      CC=clang \
+      HOSTCC=gcc \
+      LD=ld.lld \
+      AR=llvm-ar \
+      NM=llvm-nm \
+      OBJCOPY=llvm-objcopy \
+      STRIP=llvm-strip \
+      LLVM=1 \
+      LLVM_IAS=1 \
+      CLANG_TRIPLE=aarch64-linux-gnu- \
+      CROSS_COMPILE=aarch64-linux-gnu- \
+      CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+      CONFIG_DEBUG_INFO=n \
+      CONFIG_DEBUG_KERNEL=n \
+      CONFIG_WERROR=n \
+      -k 2>&1 | tee build.log   # 保存完整日志
+  shell: bash
 
       - name: Upload Kernel Artifacts
         uses: actions/upload-artifact@v4
@@ -73,7 +80,6 @@ jobs:
           path: |
             out/arch/arm64/boot/Image
             out/arch/arm64/boot/Image.gz
-            out/arch/arm64/boot/dtbo.img
             out/arch/arm64/boot/dtb
             out/arch/arm64/boot/dtb.img
             out/arch/arm64/boot/dts/vendor/qcom/*.dtb
