@@ -6,8 +6,7 @@ on:
 jobs:
   build:
     name: Build Kernel
-    runs-on: ubuntu-22.04          # ← 改成 22.04 最稳（推荐）
-    # runs-on: ubuntu-latest       # 如果想继续用 24.04，见下方方案2
+    runs-on: ubuntu-22.04
 
     steps:
       - name: Checkout Kernel Source
@@ -24,7 +23,6 @@ jobs:
             libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip \
             zlib1g-dev python3 libxml-simple-perl
 
-          # 安装旧版 ncurses 兼容库
           echo "deb http://archive.ubuntu.com/ubuntu jammy main universe" | sudo tee /etc/apt/sources.list.d/jammy-compat.list
           sudo apt-get update
           sudo apt-get install -y libtinfo5 libncurses5
@@ -35,43 +33,43 @@ jobs:
           git clone --depth=1 https://github.com/kdrag0n/proton-clang.git ~/proton-clang
 
       - name: Build Kernel
-  run: |
-    export PATH="$HOME/proton-clang/bin:$PATH"
-    export ARCH=arm64
-    export SUBARCH=arm64
-    export KBUILD_BUILD_USER="de1sek"
-    export KBUILD_BUILD_HOST="GitHub-Actions"
+        run: |
+          export PATH="$HOME/proton-clang/bin:$PATH"
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export KBUILD_BUILD_USER="de1sek"
+          export KBUILD_BUILD_HOST="GitHub-Actions"
 
-    # 增加 Swap
-    sudo fallocate -l 10G /swapfile
-    sudo chmod 600 /swapfile
-    sudo mkswap /swapfile
-    sudo swapon /swapfile
+          # 增大 Swap 防止 OOM
+          sudo fallocate -l 10G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
 
-    make O=out clean 2>/dev/null || true
-    make O=out mrproper 2>/dev/null || true
+          make O=out clean 2>/dev/null || true
+          make O=out mrproper 2>/dev/null || true
 
-    make O=out thyme_defconfig
+          make O=out thyme_defconfig
 
-    # 关键优化：降低并行度 + 关闭调试 + 允许 warning
-    make -j2 O=out \          # ← 改成 -j2 防止 OOM
-      CC=clang \
-      HOSTCC=gcc \
-      LD=ld.lld \
-      AR=llvm-ar \
-      NM=llvm-nm \
-      OBJCOPY=llvm-objcopy \
-      STRIP=llvm-strip \
-      LLVM=1 \
-      LLVM_IAS=1 \
-      CLANG_TRIPLE=aarch64-linux-gnu- \
-      CROSS_COMPILE=aarch64-linux-gnu- \
-      CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
-      CONFIG_DEBUG_INFO=n \
-      CONFIG_DEBUG_KERNEL=n \
-      CONFIG_WERROR=n \
-      -k 2>&1 | tee build.log   # 保存完整日志
-  shell: bash
+          # 保守编译参数（关键）
+          make -j2 O=out \
+            CC=clang \
+            HOSTCC=gcc \
+            LD=ld.lld \
+            AR=llvm-ar \
+            NM=llvm-nm \
+            OBJCOPY=llvm-objcopy \
+            STRIP=llvm-strip \
+            LLVM=1 \
+            LLVM_IAS=1 \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            CONFIG_DEBUG_INFO=n \
+            CONFIG_DEBUG_KERNEL=n \
+            CONFIG_WERROR=n \
+            -k 2>&1 | tee build.log
+        shell: bash
 
       - name: Upload Kernel Artifacts
         uses: actions/upload-artifact@v4
