@@ -59,7 +59,7 @@ jobs:
 
           make O=out olddefconfig
 
-          # 编译（跳过 dtbo 生成）
+          # 开始编译（简化参数）
           make -j2 O=out \
             CC=clang \
             HOSTCC=gcc \
@@ -76,7 +76,7 @@ jobs:
             CONFIG_DEBUG_INFO=n \
             CONFIG_DEBUG_KERNEL=n \
             CONFIG_WERROR=n \
-            -k --error-limit=0 2>&1 | tee build.log
+            -k 2>&1 | tee build.log
         shell: bash
 
       - name: Upload Kernel Artifacts
