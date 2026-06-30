@@ -32,7 +32,7 @@ jobs:
         run: |
           git clone --depth=1 https://github.com/kdrag0n/proton-clang.git ~/proton-clang
 
-            - name: Build Kernel
+      - name: Build Kernel
         run: |
           export PATH="$HOME/proton-clang/bin:$PATH"
           export ARCH=arm64
@@ -53,7 +53,7 @@ jobs:
 
           make O=out thyme_defconfig
 
-          # 禁用冲突驱动（更安全的方式）
+          # 禁用冲突的触摸屏驱动
           sed -i '/CONFIG_TOUCHSCREEN_ST/d' out/.config
           sed -i '/CONFIG_TOUCHSCREEN_FTS_521/d' out/.config
           echo "# CONFIG_TOUCHSCREEN_ST is not set" >> out/.config
@@ -81,6 +81,7 @@ jobs:
             CONFIG_WERROR=n \
             -k 2>&1 | tee build.log
         shell: bash
+
       - name: Upload Kernel Artifacts
         uses: actions/upload-artifact@v4
         with:
