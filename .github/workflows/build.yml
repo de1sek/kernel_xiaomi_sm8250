@@ -21,6 +21,22 @@ jobs:
             libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip \
             zlib1g-dev python3 libxml-simple-perl
 
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          # 以分支名作为缓存 key，每次命中后自动更新
+          key: ccache-thyme-alioth-r-oss-${{ github.run_id }}
+          restore-keys: |
+            ccache-thyme-alioth-r-oss-
+
+      - name: Configure ccache
+        run: |
+          ccache --max-size=5G
+          ccache --set-config=compression=true
+          ccache -z
+          echo "CCACHE_DIR=$HOME/.ccache" >> $GITHUB_ENV
+
       - name: Download Proton-Clang
         run: |
           git clone --depth=1 https://github.com/kdrag0n/proton-clang.git ~/proton-clang
@@ -49,13 +65,20 @@ jobs:
           make O=out thyme_defconfig
 
           
-          # 修复2：CONFIG_BUILD_ARM64_DT_OVERLAY=y 会调用 mkdtimg 打包 dtbo.img，
-          # 但该工具不在 GitHub Actions runner 上，报 Error 127。禁掉即可。
-          scripts/config --file out/.config -d BUILD_ARM64_DT_OVERLAY
+
+          # 修复2：禁用 BUILD_ARM64_DT_OVERLAY（runner 上没有 mkdtimg）
+          # 修复3：启用 MACH_XIAOMI_THYME（ASoC 机器驱动识别设备，初始化音频路径）
+          scripts/config --file out/.config \
+            -d BUILD_ARM64_DT_OVERLAY \
+            -e MACH_XIAOMI_THYME
           make O=out ARCH=arm64 olddefconfig
 
+          # 修复4：cs35l41 驱动调用 xlogchar_kwrite，该符号在此树未导出，替换为空操作
+          sed -i 's/xlogchar_kwrite([^;]*);/\/\* xlog stub \*\//g' \
+            techpack/audio/asoc/codecs/cs35l41/send_data_to_xlog.c
+
           make -j$(nproc --all) O=out \
-            CC=clang \
+            CC="ccache clang" \
             LD=ld.lld \
             AR=llvm-ar \
             NM=llvm-nm \
@@ -67,6 +90,9 @@ jobs:
             CLANG_TRIPLE=aarch64-linux-gnu- \
             CROSS_COMPILE=aarch64-linux-gnu- \
             CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+
+      - name: Show ccache stats
+        run: ccache -s
 
       - name: Upload Kernel Artifacts
         uses: actions/upload-artifact@v4
