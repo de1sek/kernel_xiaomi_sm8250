@@ -48,10 +48,7 @@ jobs:
 
           make O=out thyme_defconfig
 
-          # 修复1：fts_521/ 和 st/ 触摸屏驱动同时被编译，符号重复导致链接失败。
-          # 实机验证：thyme 使用 fts_521/ 驱动，删除 st/ 那一行。
-          sed -i '/+= st\//d' drivers/input/touchscreen/Makefile
-
+          
           # 修复2：CONFIG_BUILD_ARM64_DT_OVERLAY=y 会调用 mkdtimg 打包 dtbo.img，
           # 但该工具不在 GitHub Actions runner 上，报 Error 127。禁掉即可。
           scripts/config --file out/.config -d BUILD_ARM64_DT_OVERLAY
