@@ -21,8 +21,6 @@ jobs:
             libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip \
             zlib1g-dev python3 libxml-simple-perl
 
-          # ubuntu-22.04 已自带 libncurses5 / libtinfo5，无需额外添加源
-
       - name: Download Proton-Clang
         run: |
           git clone --depth=1 https://github.com/kdrag0n/proton-clang.git ~/proton-clang
@@ -48,19 +46,17 @@ jobs:
           make O=out clean 2>/dev/null || true
           make O=out mrproper 2>/dev/null || true
 
-          # 加载 thyme defconfig
           make O=out thyme_defconfig
 
-          # ---- 关键修复 ----
-          # thyme_defconfig 只有一个触摸屏 config：CONFIG_TOUCHSCREEN_ST_FTS_V521=y
-          # 但 drivers/input/touchscreen/Makefile 把 fts_521/ 和 st/ 两个目录
-          # 都挂在同一个 config 下，导致二者同时编译，20 个函数名重复，
-          # ld.lld 链接失败。
-          # thyme 实际用的是 st/ 驱动（固件 st_fts_j*.ftb 属于 st/ 目录），
-          # 直接从 Makefile 删掉 fts_521/ 那行即可。
-          echo ">>> Patching Makefile: removing fts_521 from touchscreen build..."
+          # 修复1：fts_521/ 和 st/ 触摸屏驱动同时被编译，符号重复导致链接失败
+          # thyme 使用 st/ 驱动，删除 fts_521/ 那一行
           sed -i '/fts_521/d' drivers/input/touchscreen/Makefile
-          # ---- 修复结束 ----
+
+          # 修复2：CONFIG_BUILD_ARM64_DT_OVERLAY=y 会调用 mkdtimg 打包 dtbo.img，
+          # 但该工具不在 GitHub Actions runner 上（AOSP 专属工具），报 Error 127。
+          # 我们只需要 Image / Image.gz，不需要 dtbo.img，直接禁掉即可。
+          scripts/config --file out/.config -d BUILD_ARM64_DT_OVERLAY
+          make O=out ARCH=arm64 olddefconfig
 
           make -j$(nproc --all) O=out \
             CC=clang \
