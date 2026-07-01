@@ -10,7 +10,7 @@ jobs:
       - name: Checkout Kernel Source
         uses: actions/checkout@v4
         with:
-          ref: alioth-r-oss
+          ref: lineage-18.1
 
       - name: Setup Build Environment
         run: |
@@ -25,10 +25,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.ccache
-          # 以分支名作为缓存 key，每次命中后自动更新
-          key: ccache-thyme-alioth-r-oss-${{ github.run_id }}
+          key: ccache-thyme-lineage-18.1-${{ github.run_id }}
           restore-keys: |
-            ccache-thyme-alioth-r-oss-
+            ccache-thyme-lineage-18.1-
 
       - name: Configure ccache
         run: |
@@ -62,20 +61,23 @@ jobs:
           make O=out clean 2>/dev/null || true
           make O=out mrproper 2>/dev/null || true
 
-          make O=out thyme_defconfig
+          # defconfig 路径在 arch/arm64/configs/vendor/ 下
+          make O=out vendor/thyme_defconfig
 
           
 
-          # 修复2：禁用 BUILD_ARM64_DT_OVERLAY（runner 上没有 mkdtimg）
-          # 修复3：启用 MACH_XIAOMI_THYME（ASoC 机器驱动识别设备，初始化音频路径）
+          # 修复2：禁用 BUILD_ARM64_DT_OVERLAY（runner 上没有 mkdtimg 工具）
+          # 修复3：确保 MACH_XIAOMI_THYME 启用（LineageOS defconfig 已包含，此行作确认）
           scripts/config --file out/.config \
             -d BUILD_ARM64_DT_OVERLAY \
             -e MACH_XIAOMI_THYME
           make O=out ARCH=arm64 olddefconfig
 
-          # 修复4：cs35l41 驱动调用 xlogchar_kwrite，该符号在此树未导出，替换为空操作
-          sed -i 's/xlogchar_kwrite([^;]*);/\/\* xlog stub \*\//g' \
-            techpack/audio/asoc/codecs/cs35l41/send_data_to_xlog.c
+          # 修复4：cs35l41 驱动的 xlogchar_kwrite 未导出（LineageOS 源码可能不存在此问题）
+          if [ -f techpack/audio/asoc/codecs/cs35l41/send_data_to_xlog.c ]; then
+            sed -i 's/xlogchar_kwrite([^;]*);/\/\* xlog stub \*\//g' \
+              techpack/audio/asoc/codecs/cs35l41/send_data_to_xlog.c
+          fi
 
           make -j$(nproc --all) O=out \
             CC="ccache clang" \
@@ -97,7 +99,7 @@ jobs:
       - name: Upload Kernel Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Kernel-Thyme-alioth-r-oss
+          name: Kernel-Thyme-lineage-18.1
           path: |
             out/arch/arm64/boot/Image
             out/arch/arm64/boot/Image.gz
