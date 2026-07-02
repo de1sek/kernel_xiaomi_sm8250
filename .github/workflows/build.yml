@@ -22,7 +22,6 @@ jobs:
             lib32z1-dev liblz4-tool libncurses5-dev libsdl1.2-dev libssl-dev libxml2 \
             libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip \
             zlib1g-dev python3 libxml-simple-perl dwarves
-
       - name: Restore ccache
         uses: actions/cache@v4
         with:
@@ -30,18 +29,15 @@ jobs:
           key: ccache-thyme-alioth-r-oss-${{ github.run_id }}
           restore-keys: |
             ccache-thyme-alioth-r-oss-
-
       - name: Configure ccache
         run: |
           ccache --max-size=5G
           ccache --set-config=compression=true
           ccache -z
           echo "CCACHE_DIR=$HOME/.ccache" >> $GITHUB_ENV
-
       - name: Download Proton-Clang
         run: |
           git clone --depth=1 https://github.com/kdrag0n/proton-clang.git ~/proton-clang
-
       - name: Create Swap
         run: |
           sudo swapoff -a 2>/dev/null || true
@@ -51,42 +47,38 @@ jobs:
           sudo mkswap /swapfile
           sudo swapon /swapfile
           free -h
-
       - name: Apply fixes and import LineageOS audio
         run: |
           # Python 2 wrapper fix (ubuntu-22.04 only has python3)
           printf '#!/usr/bin/env python3\nimport sys, subprocess\nsys.exit(subprocess.call(sys.argv[1:]))\n' \
             > scripts/gcc-wrapper.py
-
           # DTC yylloc fix for GCC 11 (ubuntu-22.04 default)
-          printf '\nHOSTCFLAGS_dtc-lexer.lex.o := -fcommon\nHOSTCFLAGS_dtc-parser.tab.o := -fcommon\n' \
+          # NOTE: was ":=" before, which overwrote the tree's existing
+          # "-I $(srctree)/$(src)" HOSTCFLAGS needed to locate dtc.h when
+          # building out-of-tree (O=out). Using "+=" appends instead of
+          # clobbering it.
+          printf '\nHOSTCFLAGS_dtc-lexer.lex.o += -fcommon\nHOSTCFLAGS_dtc-parser.tab.o += -fcommon\n' \
             >> scripts/dtc/Makefile
-
           # SKULD hardware platform constant missing in this tree
           find drivers/power/supply/qcom -name "*.c" | xargs \
             sed -i '1s/^/#ifndef HARDWARE_PLATFORM_SKULD\n#define HARDWARE_PLATFORM_SKULD 0\n#endif\n\n/' || true
-
           # MODVERSIONS: disable so MIUI vendor .ko modules load correctly (WiFi fix)
           sed -i 's/CONFIG_MODVERSIONS=y/# CONFIG_MODVERSIONS is not set/' \
             arch/arm64/configs/thyme_defconfig || true
           sed -i 's/CONFIG_LOCALVERSION_AUTO=y/# CONFIG_LOCALVERSION_AUTO is not set/' \
             arch/arm64/configs/thyme_defconfig || true
-
           
           # Clone LineageOS source for audio directories
           git clone --depth=1 -b lineage-18.1 \
             https://github.com/LineageOS/android_kernel_xiaomi_sm8250 /tmp/los_kernel
-
           # Replace techpack/audio and sound/soc with LineageOS version
           rm -rf techpack/audio
           cp -r /tmp/los_kernel/techpack/audio techpack/audio
           rm -rf sound/soc
           cp -r /tmp/los_kernel/sound/soc sound/soc
-
           # cs35l41: stub out xlogchar_kwrite (symbol not exported in this tree)
           sed -i 's/xlogchar_kwrite([^;]*);/\/\* xlog stub \*\//g' \
             techpack/audio/asoc/codecs/cs35l41/send_data_to_xlog.c || true
-
       - name: Build Kernel
         run: |
           export PATH="$HOME/proton-clang/bin:$PATH"
@@ -94,16 +86,13 @@ jobs:
           export SUBARCH=arm64
           export KBUILD_BUILD_USER="de1sek"
           export KBUILD_BUILD_HOST="GitHub-Actions"
-
           make O=out clean 2>/dev/null || true
           make O=out mrproper 2>/dev/null || true
           make O=out thyme_defconfig
-
           scripts/config --file out/.config \
             -d BUILD_ARM64_DT_OVERLAY \
             -e MACH_XIAOMI_THYME
           make O=out ARCH=arm64 olddefconfig
-
           make -j$(nproc --all) O=out \
             CC="ccache clang" \
             LD=ld.lld \
@@ -117,7 +106,6 @@ jobs:
             CLANG_TRIPLE=aarch64-linux-gnu- \
             CROSS_COMPILE=aarch64-linux-gnu- \
             CROSS_COMPILE_ARM32=arm-linux-gnueabi-
-
       - name: Show ccache stats
         run: ccache -s
 
