@@ -192,10 +192,37 @@ jobs:
           make O=out clean 2>/dev/null || true
           make O=out mrproper 2>/dev/null || true
           make O=out thyme_defconfig
+          # MSM_CSPL: gates techpack/audio/dsp/msm-cirrus-playback.c
+          #           (crus_afe_*/crus_sp_* symbols)
+          # US_PROXIMITY: gates techpack/audio/dsp/apr_mius.c +
+          #           techpack/audio/dsp/mius/*.c (mius_* symbols)
+          # Both are nested under CONFIG_MACH_XIAOMI_SM8250 in
+          # techpack/audio/dsp/Kbuild, so that has to be on too -
+          # it's not guaranteed to be auto-selected by MACH_XIAOMI_THYME.
           scripts/config --file out/.config \
             -d BUILD_ARM64_DT_OVERLAY \
-            -e MACH_XIAOMI_THYME
+            -e MACH_XIAOMI_THYME \
+            -e MACH_XIAOMI_SM8250 \
+            -e MSM_CSPL \
+            -e US_PROXIMITY
           make O=out ARCH=arm64 olddefconfig
+
+          echo "== Verifying Cirrus/mius Kconfig options survived olddefconfig =="
+          CONFIG_FAIL=0
+          for cfg in CONFIG_MACH_XIAOMI_SM8250 CONFIG_MSM_CSPL CONFIG_US_PROXIMITY; do
+            if grep -qx "${cfg}=y" out/.config; then
+              echo "  ${cfg}=y  OK"
+            else
+              echo "::error::${cfg} 未能启用(可能是 Kconfig 的 depends on 条件没满足,被 olddefconfig 自动改回了 n)。Cirrus/mius 智能功放驱动不会被编译进内核,链接阶段会再次报 undefined symbol。"
+              grep -n "^# ${cfg} is not set" out/.config || true
+              CONFIG_FAIL=1
+            fi
+          done
+          if [ "$CONFIG_FAIL" = "1" ]; then
+            echo "::error::请检查 techpack/audio/dsp/Kconfig(或相邻的 Kconfig 文件)里这几个选项的 depends on 条件,确认还差哪个前置选项没打开。"
+            exit 1
+          fi
+
           make -j$(nproc --all) O=out \
             CC="ccache clang" \
             LD=ld.lld \
