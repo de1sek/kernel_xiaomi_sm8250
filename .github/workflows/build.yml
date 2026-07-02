@@ -50,35 +50,138 @@ jobs:
       - name: Apply fixes and import LineageOS audio
         run: |
           # Python 2 wrapper fix (ubuntu-22.04 only has python3)
+          # NOTE: with LLVM=1 set in the Build Kernel step, this wrapper is
+          # likely unused (the Makefile's gcc-wrapper path only triggers for
+          # non-LLVM/GCC builds). Kept harmless for now.
           printf '#!/usr/bin/env python3\nimport sys, subprocess\nsys.exit(subprocess.call(sys.argv[1:]))\n' \
             > scripts/gcc-wrapper.py
+
           # DTC yylloc fix for GCC 11 (ubuntu-22.04 default)
-          # NOTE: was ":=" before, which overwrote the tree's existing
-          # "-I $(srctree)/$(src)" HOSTCFLAGS needed to locate dtc.h when
-          # building out-of-tree (O=out). Using "+=" appends instead of
-          # clobbering it.
+          # Using "+=" appends to (rather than overwrites) the tree's existing
+          # "-I $(srctree)/$(src)" HOSTCFLAGS, which is required to locate
+          # dtc.h when building out-of-tree (O=out). A plain ":=" here was
+          # the cause of the earlier "fatal error: dtc.h: No such file or
+          # directory" build failure.
           printf '\nHOSTCFLAGS_dtc-lexer.lex.o += -fcommon\nHOSTCFLAGS_dtc-parser.tab.o += -fcommon\n' \
             >> scripts/dtc/Makefile
+
           # SKULD hardware platform constant missing in this tree
           find drivers/power/supply/qcom -name "*.c" | xargs \
             sed -i '1s/^/#ifndef HARDWARE_PLATFORM_SKULD\n#define HARDWARE_PLATFORM_SKULD 0\n#endif\n\n/' || true
+
           # MODVERSIONS: disable so MIUI vendor .ko modules load correctly (WiFi fix)
           sed -i 's/CONFIG_MODVERSIONS=y/# CONFIG_MODVERSIONS is not set/' \
             arch/arm64/configs/thyme_defconfig || true
           sed -i 's/CONFIG_LOCALVERSION_AUTO=y/# CONFIG_LOCALVERSION_AUTO is not set/' \
             arch/arm64/configs/thyme_defconfig || true
-          
+
+          # ==========================================================
+          # LineageOS audio import
+          # ==========================================================
+          # The Cirrus Logic smart-PA / speaker-protection driver
+          # (crus_sp_init / crus_afe_* / mius_* symbols, called from
+          # techpack/audio/dsp/q6afe.c, q6_init.c and
+          # techpack/audio/asoc/msm-pcm-routing-v2.c) lives *inside*
+          # techpack/audio in this tree. A plain "rm -rf techpack/audio"
+          # + copy from LOS silently drops its implementation if LOS's
+          # tree doesn't ship the same subdirectory. That only surfaces
+          # as "undefined symbol" errors at the final vmlinux link step,
+          # roughly 15 minutes into the build.
+          #
+          # To avoid wasting build time and to try to recover automatically,
+          # we (1) locate whichever files define these symbols before wiping
+          # techpack/audio, (2) back them up, (3) re-check after the LOS
+          # import, (4) restore the backup if anything is missing, and
+          # (5) fail fast with a clear message if it is still missing.
+
+          NEEDED_SYMS="crus_afe_callback crus_afe_port_start crus_afe_port_close crus_sp_init crus_sp_exit mius_process_apr_payload mius_driver_init mius_driver_exit mius_add_component_controls msm_crus_pb_add_controls"
+
+          find_def() {
+            # $1 = symbol name; prints the path of the first .c file that
+            # appears to DEFINE (not just declare/call) the symbol.
+            grep -rlE "^[A-Za-z_][A-Za-z0-9_ \*]*\b$1\s*\(" . --include="*.c" 2>/dev/null \
+              | grep -v -e '^\./out/' -e '^\./\.git/' \
+              | head -n1
+          }
+
+          echo "== [1/4] Locating Cirrus/mius smart-PA driver source before wipe =="
+          mkdir -p /tmp/crus_backup
+          : > /tmp/crus_backup/dirs.list
+          for sym in $NEEDED_SYMS; do
+            hit="$(find_def "$sym")"
+            if [ -n "$hit" ]; then
+              d="$(dirname "$hit")"
+              echo "  $sym  ->  $hit"
+              if ! grep -qxF "$d" /tmp/crus_backup/dirs.list 2>/dev/null; then
+                echo "$d" >> /tmp/crus_backup/dirs.list
+                tag="$(echo "$d" | md5sum | cut -c1-8)"
+                cp -r "$d" "/tmp/crus_backup/${tag}"
+                echo "$d" > "/tmp/crus_backup/${tag}.path"
+              fi
+            else
+              echo "  $sym  ->  not found (may already be a prebuilt/blob-only symbol)"
+            fi
+          done
+
           # Clone LineageOS source for audio directories
           git clone --depth=1 -b lineage-18.1 \
             https://github.com/LineageOS/android_kernel_xiaomi_sm8250 /tmp/los_kernel
+
           # Replace techpack/audio and sound/soc with LineageOS version
           rm -rf techpack/audio
           cp -r /tmp/los_kernel/techpack/audio techpack/audio
           rm -rf sound/soc
           cp -r /tmp/los_kernel/sound/soc sound/soc
+
           # cs35l41: stub out xlogchar_kwrite (symbol not exported in this tree)
           sed -i 's/xlogchar_kwrite([^;]*);/\/\* xlog stub \*\//g' \
             techpack/audio/asoc/codecs/cs35l41/send_data_to_xlog.c || true
+
+          echo "== [2/4] Re-checking Cirrus/mius symbols after LOS import =="
+          MISSING=""
+          for sym in $NEEDED_SYMS; do
+            hit="$(find_def "$sym")"
+            if [ -z "$hit" ]; then
+              MISSING="$MISSING $sym"
+              echo "  $sym  ->  still missing"
+            else
+              echo "  $sym  ->  OK ($hit)"
+            fi
+          done
+
+          if [ -n "$MISSING" ]; then
+            echo "== [3/4] Restoring original driver directories from backup =="
+            for f in /tmp/crus_backup/*.path; do
+              [ -e "$f" ] || continue
+              d="$(cat "$f")"
+              tag="$(basename "$f" .path)"
+              echo "  restoring $d"
+              rm -rf "$d"
+              mkdir -p "$(dirname "$d")"
+              cp -r "/tmp/crus_backup/${tag}" "$d"
+            done
+          else
+            echo "== [3/4] Nothing to restore, LOS import already has everything =="
+          fi
+
+          echo "== [4/4] Final check =="
+          STILL_MISSING=""
+          for sym in $NEEDED_SYMS; do
+            hit="$(find_def "$sym")"
+            if [ -z "$hit" ]; then
+              STILL_MISSING="$STILL_MISSING $sym"
+            else
+              echo "  $sym  ->  OK ($hit)"
+            fi
+          done
+
+          if [ -n "$STILL_MISSING" ]; then
+            echo "::error::以下 Cirrus/mius 智能功放符号在整棵源码树里都找不到定义,继续构建必定会在链接 vmlinux 时失败:$STILL_MISSING"
+            echo "::error::这部分驱动很可能是私有 blob,没有随这两份源码中的任何一份提供。需要人工确认设备实际使用的功放型号/驱动来源,从对应的完整厂商源码包里补齐这些符号的实现,或者手动去掉 techpack/audio/dsp/q6afe.c、q6_init.c、techpack/audio/asoc/msm-pcm-routing-v2.c 里对这些符号的调用(会牺牲智能功放保护功能,但能让内核编译通过)。"
+            exit 1
+          fi
+
+          echo "所有相关符号均已就位,继续构建。"
       - name: Build Kernel
         run: |
           export PATH="$HOME/proton-clang/bin:$PATH"
